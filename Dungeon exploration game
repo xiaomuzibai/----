@@ -1,1 +1,224 @@
-
+#define _CRT_SECURE_NO_WARNINGS
+#include <graphics.h>
+#include <vector>
+#include <ctime>
+#include <cstdlib>
+#include <tchar.h>
+#pragma comment(lib,"Winmm.lib")
+const int TILE = 32;
+const int COLS = 25;
+const int ROWS = 19;
+const int WIDTH = COLS * TILE;
+const int HEIGHT = (ROWS + 1) * TILE;
+IMAGE* imgFloor, * imgWall, * imgChest, * imgMonster, * imgGoal, * imgPerson;
+struct Pos { int x, y; };
+struct Monster {
+    Pos p;
+    int hp, atk;
+    int moveCD = 0;
+};
+struct DamageText {
+    Pos p;
+    int hp;
+    int life;
+};
+std::vector<Monster> monsters;
+std::vector<Pos> treasure;
+std::vector<std::vector<int>> mapv;
+int px = 0, py = 0;
+int playerHP = 100, playerATK = 20;
+int chestTotal = 0, chestGot = 0;
+int shakeDuration = 0;
+int shakeOffsetX = 0, shakeOffsetY = 0;
+std::vector<DamageText> damageTexts;
+void loadTile(IMAGE*& img, const TCHAR* file) {
+    img = new IMAGE;
+    if (loadimage(img, file, TILE, TILE, true) != 0) {
+        MessageBox(nullptr, file, _T("缺失"), MB_OK);
+        exit(1);
+    }
+}
+bool canMove(int x, int y) {
+    if (x < 0 || x >= COLS || y < 0 || y >= ROWS) return false;
+    return mapv[y][x] == 0;
+}
+void draw() {
+    if (shakeDuration > 0) {
+        if (--shakeDuration == 0) {
+            shakeOffsetX = 0;
+            shakeOffsetY = 0;
+        }
+        else {
+            shakeOffsetX = rand() % 6 - 3;
+            shakeOffsetY = rand() % 6 - 3;
+        }
+    }
+    BeginBatchDraw();
+    setfillcolor(BLACK);
+    solidrectangle(0, 0, WIDTH - 1, HEIGHT - 1);
+    for (int i = 0; i < ROWS; ++i)
+        for (int j = 0; j < COLS; ++j) {
+            putimage(j * TILE + shakeOffsetX, (i + 1) * TILE + shakeOffsetY, imgFloor);
+            if (mapv[i][j])
+                putimage(j * TILE + shakeOffsetX, (i + 1) * TILE + shakeOffsetY, imgWall);
+        }
+    auto putT = [](int x, int y, IMAGE* img) {
+        putimage(x * TILE + shakeOffsetX, (y + 1) * TILE + shakeOffsetY, img, SRCAND);
+        putimage(x * TILE + shakeOffsetX, (y + 1) * TILE + shakeOffsetY, img, SRCPAINT);
+        };
+    for (auto& m : monsters) putT(m.p.x, m.p.y, imgMonster);
+    for (auto& t : treasure) putT(t.x, t.y, imgChest);
+    putT(COLS - 1, ROWS - 1, imgGoal);
+    putT(px, py, imgPerson);
+    setfillcolor(RGB(255, 255, 255));
+    solidrectangle(10, 5, 400, 30);
+    TCHAR buf[128];
+    _stprintf(buf, _T("HP:%d  ATK:%d  还需拾取:%d"), playerHP, playerATK, chestTotal - chestGot);
+    setbkmode(TRANSPARENT);
+    settextcolor(BLACK);
+    outtextxy(15, 10, buf);
+    settextcolor(RED);
+    setbkmode(TRANSPARENT);
+    for (auto& dt : damageTexts) {
+        int screenX = dt.p.x * TILE + shakeOffsetX + TILE / 2 - 10;
+        int screenY = (dt.p.y + 1) * TILE + shakeOffsetY - dt.life;
+        _stprintf(buf, _T("-%d"), dt.hp);
+        outtextxy(screenX, screenY, buf);
+    }
+    FlushBatchDraw();
+}
+void tryBattle() {
+    for (auto it = monsters.begin(); it != monsters.end(); ++it) {
+        int dx = abs(it->p.x - px), dy = abs(it->p.y - py);
+        if (dx + dy <= 2) {
+            damageTexts.push_back({ it->p, playerATK, 20 });
+            int pushX = it->p.x + (it->p.x > px ? 1 : -1);
+            int pushY = it->p.y + (it->p.y > py ? 1 : -1);
+            if (canMove(pushX, it->p.y)) it->p.x = pushX;
+            else if (canMove(it->p.x, pushY)) it->p.y = pushY;
+            it->hp -= playerATK;
+            shakeDuration = 5;
+            Sleep(40);
+            if (it->hp <= 0) {
+                treasure.push_back({ it->p.x, it->p.y });
+                chestTotal++;
+                monsters.erase(it);
+                Sleep(60);
+                return;
+            }
+            playerHP -= it->atk;
+            if (playerHP <= 0) return;
+            break;
+        }
+    }
+}
+bool keyPressed[256] = {};
+void movePlayer() {
+    bool w = (GetAsyncKeyState('W') & 0x8000) != 0;
+    bool s = (GetAsyncKeyState('S') & 0x8000) != 0;
+    bool a = (GetAsyncKeyState('A') & 0x8000) != 0;
+    bool d = (GetAsyncKeyState('D') & 0x8000) != 0;
+    bool j = (GetAsyncKeyState('J') & 0x8000) != 0;
+    int nx = px, ny = py;
+    if (w && !keyPressed['W']) { --ny; keyPressed['W'] = true; }
+    if (s && !keyPressed['S']) { ++ny; keyPressed['S'] = true; }
+    if (a && !keyPressed['A']) { --nx; keyPressed['A'] = true; }
+    if (d && !keyPressed['D']) { ++nx; keyPressed['D'] = true; }
+    if (j && !keyPressed['J']) { keyPressed['J'] = true; tryBattle(); }
+    if (!w) keyPressed['W'] = false;
+    if (!s) keyPressed['S'] = false;
+    if (!a) keyPressed['A'] = false;
+    if (!d) keyPressed['D'] = false;
+    if (!j) keyPressed['J'] = false;
+    if (nx == px && ny == py) return;
+    if (!canMove(nx, ny)) return;
+    px = nx; py = ny;
+    for (auto it = treasure.begin(); it != treasure.end(); ++it)
+        if (it->x == px && it->y == py) {
+            treasure.erase(it);
+            chestGot++;
+            break;
+        }
+    for (auto& m : monsters)
+        if (m.p.x == px && m.p.y == py) {
+            playerHP = 0;
+            return;
+        }
+}
+void moveMonsters() {
+    for (auto& m : monsters) {
+        if (--m.moveCD > 0) continue;
+        int dx = px - m.p.x;
+        int dy = py - m.p.y;
+        if (dx == 0 && dy == 0) continue;
+        int nx = m.p.x + (dx > 0 ? 1 : dx < 0 ? -1 : 0);
+        int ny = m.p.y + (dy > 0 ? 1 : dy < 0 ? -1 : 0);
+        if (canMove(nx, ny)) { m.p.x = nx; m.p.y = ny; }
+        m.moveCD = 20;
+    }
+}
+int main() {
+    initgraph(WIDTH, HEIGHT);
+    loadTile(imgFloor, _T("./assets/floor.png"));
+    loadTile(imgWall, _T("./assets/wall.png"));
+    loadTile(imgChest, _T("./assets/chest.png"));
+    loadTile(imgMonster, _T("./assets/monster.png"));
+    loadTile(imgGoal, _T("./assets/goal.png"));
+    loadTile(imgPerson, _T("./assets/person.png"));
+    mapv.assign(ROWS, std::vector<int>(COLS, 0));
+    srand((unsigned)time(nullptr));
+    for (int i = 0; i < ROWS; ++i)
+        for (int j = 0; j < COLS; ++j)
+            if (rand() % 10 < 3) mapv[i][j] = 1;
+    mapv[0][0] = 0;
+    mapv[ROWS - 1][COLS - 1] = 0;
+    int mobCnt = 5, chestCnt = 3;
+    for (int c = 0; c < mobCnt; ) {
+        int x = rand() % COLS, y = rand() % ROWS;
+        if (mapv[y][x] == 0 && !(x == 0 && y == 0)) {
+            bool ok = true;
+            for (auto& m : monsters) if (m.p.x == x && m.p.y == y) ok = false;
+            if (ok) { monsters.push_back({ {x, y}, 50, 15 }); ++c; }
+        }
+    }
+    for (int c = 0; c < chestCnt; ) {
+        int x = rand() % COLS, y = rand() % ROWS;
+        if (mapv[y][x] == 0 && !(x == 0 && y == 0)) {
+            bool ok = true;
+            for (auto& m : monsters) if (m.p.x == x && m.p.y == y) ok = false;
+            for (auto& t : treasure)   if (t.x == x && t.y == y) ok = false;
+            if (ok) { treasure.push_back({ x, y }); ++c; }
+        }
+    }
+    chestTotal = (int)treasure.size();
+    chestGot = 0;
+    MessageBox(nullptr,
+        _T("规则：\n1. WASD移动，J攻击（两格内有效）。\n")
+        _T("2. 击败怪物掉落宝箱，拾齐后走到终点通关。\n")
+        _T("3. 碰到怪即死，HP≤0失败。"),
+        _T("游戏说明"), MB_OK | MB_ICONINFORMATION);
+    while (true) {
+        movePlayer();
+        moveMonsters();
+        draw();
+        for (auto it = damageTexts.begin(); it != damageTexts.end(); ) {
+            if (--it->life <= 0) it = damageTexts.erase(it);
+            else ++it;
+        }
+        if (playerHP <= 0) {
+            MessageBox(nullptr, _T("游戏结束：玩家阵亡！"), _T("提示"), MB_OK);
+            break;
+        }
+        if (px == COLS - 1 && py == ROWS - 1) {
+            if (chestGot < chestTotal)
+                MessageBox(nullptr, _T("请先拾取所有宝箱！"), _T("提示"), MB_OK);
+            else {
+                MessageBox(nullptr, _T("恭喜通关！"), _T("胜利"), MB_OK);
+                break;
+            }
+        }
+        Sleep(16);
+    }
+    closegraph();
+    return 0;
+}
